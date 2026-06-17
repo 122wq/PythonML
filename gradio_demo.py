@@ -1,47 +1,16 @@
 from pathlib import Path
 
 import gradio as gr
-import torch
-import torch.nn as nn
+import numpy as np
+import onnxruntime as ort
 from PIL import Image, ImageOps
 from torchvision import datasets, transforms
-
-
-class CNN(nn.Module):
-    def __init__(self):
-        super(CNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1)
-        self.relu = nn.ReLU()
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.fc1 = nn.Linear(64 * 7 * 7, 128)
-        self.fc2 = nn.Linear(128, 10)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.relu(x)
-        x = self.pool(x)
-        x = self.conv2(x)
-        x = self.relu(x)
-        x = self.pool(x)
-        x = x.view(-1, 64 * 7 * 7)
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return x
-
-
-MODEL_PATH = Path(__file__).with_name("mnist_model.pth")
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MODEL_PATH = Path(__file__).with_name("mnist_model.onnx")
 
 if not MODEL_PATH.exists():
     raise FileNotFoundError(f"Missing model file: {MODEL_PATH}")
 
-model = CNN()
-state_dict = torch.load(MODEL_PATH, map_location=DEVICE)
-model.load_state_dict(state_dict)
-model.to(DEVICE)
-model.eval()
+session = ort.InferenceSession(str(MODEL_PATH), providers=["CPUExecutionProvider"])
 
 preprocess = transforms.Compose(
     [
@@ -75,12 +44,12 @@ def predict_digit(image: Image.Image):
 
     image = ImageOps.autocontrast(image.convert("L"))
     image = ImageOps.invert(image)
-    tensor = preprocess(image).unsqueeze(0).to(DEVICE)
+    tensor = preprocess(image).unsqueeze(0).numpy().astype(np.float32)
+    outputs = session.run(["logits"], {"input": tensor})
 
-    with torch.no_grad():
-        logits = model(tensor)
-        probabilities = torch.softmax(logits, dim=1)[0].cpu().tolist()
-
+    logits = outputs[0][0]
+    exp_logits = np.exp(logits - np.max(logits))
+    probabilities = exp_logits / np.sum(exp_logits)
     return {str(index): float(probability) for index, probability in enumerate(probabilities)}
 
 
@@ -92,7 +61,7 @@ demo = gr.Interface(
     ),
     outputs=gr.Label(num_top_classes=3, label="Prediction"),
     title="MNIST Digit Classifier",
-    description="Upload or draw a handwritten digit and the app will classify it using mnist_model.pth.",
+    description="Upload or draw a handwritten digit and the app will classify it using mnist_model.onnx.",
     examples=load_example_digits(),
     api_name="predict",
 )

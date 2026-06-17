@@ -145,5 +145,6 @@ show_predictions(images[:10], labels[:10], preds[:10])
 
 # Save the model
 torch.save(model.state_dict(), 'mnist_model.pth')
+torch.save(model, 'mnist_model.pkl')
 print("Model saved!")
 
